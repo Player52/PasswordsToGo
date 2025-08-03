@@ -6,30 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [0.2.0]
+## [Unreleased]
 
 ### Added
-- Modern, user-friendly GUI with a sleek design using themed widgets.
-- Password encryption using Fernet symmetric encryption for all stored data.
-- PIN authentication required on startup; PIN set securely on first use.
-- Clipboard integration: new and generated passwords are automatically copied to clipboard with a notification.
-- "View Passwords" and "Search Password" features with easy copy-to-clipboard and show/hide functionality.
-- Change PIN feature in the app.
-- Auto-installation of required Python dependencies on first run.
-- Helpful error messages and instructions for first-time setup.
+- **Master Password:** Replaces the PIN system. Users now set a master password (minimum 8 characters) for unlocking the app, increasing security.
+- **Password Strength Meter:** A visual indicator of password strength is shown when creating or generating passwords.
+- **Export/Import Encrypted Vault:** Users can export their encrypted password vault to a file and import it later for backup and restore.
+- **Autolock/Timeout:** The app automatically locks after a period of inactivity (default 120 seconds), requiring the master password to unlock.
+- **Dark Mode / Theme Selector:** Users can switch between light and dark themes for better comfort.
+- **Favorites / Most Used:** Mark password entries as favorites, and see your most frequently used passwords.
+- **Password History:** Each password entry keeps a history of previous passwords.
+- **Two-Factor Authentication (2FA) Storage:** Optionally store TOTP secrets or 2FA backup codes with each password entry.
+- **Breach Check:** Integration with "Have I Been Pwned" public API to check if a password has appeared in known data breaches.
+- **Customizable Password Generator:** Users can control password length, character sets, and exclude ambiguous characters.
+- **Secure Notes:** Store arbitrary secure notes, encrypted in the vault.
+- **Secure Clipboard Management:** Passwords copied to clipboard are automatically cleared after 15 seconds.
+- **Biometric Unlock (Simplified/Stub):** On Windows, a prototype biometric unlock (Windows Hello) is available. Falls back to master password if not available.
+- The implementation is **simplified for testing** and demonstration. For production, it should be modularized and thoroughly tested.
 
 ### Changed
-- Improved layout and visual consistency across all screens.
-- Enhanced error handling for incorrect PIN entry and missing files.
-- Password generator now uses a broader set of secure characters.
+- Major refactor to support new features; user interface reorganized for clarity and easy navigation.
+- Improved error handling and informative messages throughout the app.
+- Documentation and UI updated to reflect new features.
 
 ### Security
-- Key files (`secret.key`, `pin.key`) are required for decryption/authentication and are never transmitted.
-- Clear warnings about irreversible data loss if keys are deleted.
+- All sensitive information remains encrypted; master password and key files are never transmitted.
+- Vault export/import is always encrypted.
+- Clipboard is cleared automatically.
 
 ### Documentation
-- Initial drafts for README and CHANGELOG.
-- Usage and contribution instructions added.
+- Updated README and CHANGELOG to reflect new features and usage.
+- Added notes on feature simplification for testing purposes.
 
 ---
 
@@ -37,4 +44,3 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Initial proof of concept: basic Tkinter GUI, plain JSON storage, password adding/viewing/searching.
 - No encryption or PIN protection.
-
