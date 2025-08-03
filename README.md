@@ -31,7 +31,7 @@ We put your security first:
 
 ## 🖥️ Usage
 
-1. **Download or clone this repository** to your computer.
+1. **Download or clone this repository** to your computer if you haven't already.
 2. **Open a terminal** in the project folder.
 3. **Run the script:**
 
@@ -43,11 +43,17 @@ We put your security first:
    ```
    python3 passwordstogo.py
    ```
+      OR
+1. **Download or clone this repository** to your computer if you haven't already.
+2. **Go to File Explorer**
+3. **Open python passwordstogo.py or if that isn't there: python3 passwordstogo.py**
 
-4. **On first use:**  
+**Regardless of whatever method you used:**
+
+5. **On first use:**  
    - Set a 4-digit PIN.  
    - Remember this PIN! If you lose it, you must delete both `pin.key` and `secret.key` (but this will erase all your stored passwords).
-5. **Follow the on-screen instructions** to add, find, or manage passwords.
+6. **Follow the on-screen instructions** to add, find, or manage passwords.
 
 ---
 
