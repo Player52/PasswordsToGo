@@ -1,31 +1,72 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox, simpledialog, filedialog
 import json
 import os
 import random
 import string
+import time
+import threading
+import hashlib
+import platform
+import sys
 
-# Ensure cryptography and pyperclip are installed
+# External dependencies
 try:
     from cryptography.fernet import Fernet, InvalidToken
 except ImportError:
     import subprocess
-    subprocess.check_call(["python", "-m", "pip", "install", "cryptography"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "cryptography"])
     from cryptography.fernet import Fernet, InvalidToken
 
 try:
     import pyperclip
 except ImportError:
     import subprocess
-    subprocess.check_call(["python", "-m", "pip", "install", "pyperclip"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyperclip"])
     import pyperclip
 
-PASSWORDS_FILE = "passwords.json"
+# Optional for breach check
+try:
+    import requests
+except ImportError:
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "requests"])
+    import requests
+
+# OS-specific biometric support (Windows Hello as prototype)
+if platform.system() == "Windows":
+    try:
+        import win32com.client  # part of pywin32
+    except ImportError:
+        import subprocess
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "pywin32"])
+        import win32com.client
+
+VAULT_FILE = "passwords.json"
 KEY_FILE = "secret.key"
-PIN_FILE = "pin.key"
+MASTER_FILE = "masterpw.key"
+THEME_FILE = "theme.pref"
+
+AUTOLCK_TIMEOUT = 120  # seconds
+
+class SecureClipboard:
+    """Clipboard manager with auto-clear."""
+    def __init__(self):
+        self.timer = None
+
+    def copy(self, text, clear_after=15):
+        pyperclip.copy(text)
+        if self.timer and self.timer.is_alive():
+            self.timer.cancel()
+        self.timer = threading.Timer(clear_after, self.clear_clipboard)
+        self.timer.start()
+
+    def clear_clipboard(self):
+        pyperclip.copy("")
+
+clipboard = SecureClipboard()
 
 # --- ENCRYPTION SETUP ---
-
 def generate_key():
     key = Fernet.generate_key()
     with open(KEY_FILE, "wb") as key_file:
@@ -46,288 +87,634 @@ def encrypt(text):
 def decrypt(token):
     try:
         return fernet.decrypt(token.encode()).decode()
-    except InvalidToken:
+    except Exception:
         return "<Decryption Failed>"
 
-# --- PIN SETUP ---
+# --- MASTER PASSWORD FUNCTIONALITY ---
+def set_master_password(masterpw):
+    salted = hashlib.sha256(("PasswordsToGo" + masterpw).encode()).hexdigest()
+    with open(MASTER_FILE, "wb") as f:
+        f.write(fernet.encrypt(salted.encode()))
 
-def set_pin(pin):
-    # Use Fernet to encrypt the pin with the main key
-    with open(PIN_FILE, "wb") as f:
-        f.write(fernet.encrypt(pin.encode()))
-
-def verify_pin(pin):
-    if not os.path.exists(PIN_FILE):
+def verify_master_password(masterpw):
+    if not os.path.exists(MASTER_FILE):
         return False
-    with open(PIN_FILE, "rb") as f:
-        encrypted_pin = f.read()
+    with open(MASTER_FILE, "rb") as f:
+        encrypted = f.read()
     try:
-        stored_pin = fernet.decrypt(encrypted_pin).decode()
-        return pin == stored_pin
+        stored = fernet.decrypt(encrypted).decode()
+        user = hashlib.sha256(("PasswordsToGo" + masterpw).encode()).hexdigest()
+        return stored == user
     except InvalidToken:
         return False
 
-def pin_is_set():
-    return os.path.exists(PIN_FILE)
+def masterpw_is_set():
+    return os.path.exists(MASTER_FILE)
 
-# --- PASSWORD STORAGE ---
-
-def load_passwords():
-    if not os.path.exists(PASSWORDS_FILE):
-        return {}
-    with open(PASSWORDS_FILE, "r") as f:
+# --- VAULT STORAGE ---
+def load_vault():
+    if not os.path.exists(VAULT_FILE):
+        return {"entries": [], "notes": []}
+    with open(VAULT_FILE, "r") as f:
         try:
             return json.load(f)
         except json.JSONDecodeError:
-            return {}
+            return {"entries": [], "notes": []}
 
-def save_passwords(passwords):
-    with open(PASSWORDS_FILE, "w") as f:
-        json.dump(passwords, f, indent=2)
+def save_vault(vault):
+    with open(VAULT_FILE, "w") as f:
+        json.dump(vault, f, indent=2)
 
-def generate_password(length=16):
-    chars = string.ascii_letters + string.digits + string.punctuation
-    return ''.join(random.choice(chars) for _ in range(length))
+def export_vault(filepath, vault):
+    data = encrypt(json.dumps(vault))
+    with open(filepath, "w") as f:
+        f.write(data)
 
-# --- MODERN GUI ---
-
-class PinDialog(simpledialog.Dialog):
-    def __init__(self, parent, title, is_setting=False):
-        self.is_setting = is_setting
-        super().__init__(parent, title)
-    def body(self, frame):
-        ttk.Label(frame, text="Enter your 4-digit PIN:" if not self.is_setting else "Set a new 4-digit PIN:",
-                  font=("Segoe UI", 12)).pack(pady=8)
-        self.pin_var = tk.StringVar()
-        self.pin_entry = ttk.Entry(frame, textvariable=self.pin_var, show="*", font=("Segoe UI", 14), width=12, justify="center")
-        self.pin_entry.pack(pady=4)
-        self.pin_entry.focus()
-        if self.is_setting:
-            ttk.Label(frame, text="Do not forget this PIN!\nIf forgotten, delete pin.key and secret.key to reset.\n(You will lose your passwords)",
-                      font=("Segoe UI", 8), foreground="gray").pack(pady=4)
-        return self.pin_entry
-    def validate(self):
-        pin = self.pin_var.get()
-        if len(pin) == 4 and pin.isdigit():
-            self.result = pin
+def import_vault(filepath):
+    with open(filepath, "r") as f:
+        data = f.read()
+    try:
+        jsondata = json.loads(decrypt(data))
+        if "entries" in jsondata and "notes" in jsondata:
+            save_vault(jsondata)
             return True
-        messagebox.showerror("PIN Error", "PIN must be exactly 4 digits.")
+        else:
+            return False
+    except Exception:
         return False
 
-class PasswordManagerGUI:
-    def __init__(self, master):
-        self.master = master
-        self.master.withdraw()  # Hide main until PIN passed
+# --- PASSWORD GENERATION ---
+def generate_password(length=16, use_upper=True, use_lower=True, use_digits=True, use_symbols=True, exclude_ambiguous=False):
+    upper = string.ascii_uppercase
+    lower = string.ascii_lowercase
+    digits = string.digits
+    symbols = string.punctuation
+    ambiguous = "O0Il1|`'\";,.[]{}()"
 
-        # Modern theme
-        style = ttk.Style()
+    chars = ""
+    if use_upper: chars += upper
+    if use_lower: chars += lower
+    if use_digits: chars += digits
+    if use_symbols: chars += symbols
+    if exclude_ambiguous:
+        chars = "".join([c for c in chars if c not in ambiguous])
+    if not chars:
+        chars = lower
+    return ''.join(random.choice(chars) for _ in range(length))
+
+def password_strength(password):
+    length = len(password)
+    categories = [
+        any(c.isupper() for c in password),
+        any(c.islower() for c in password),
+        any(c.isdigit() for c in password),
+        any(c in string.punctuation for c in password)
+    ]
+    score = sum(categories) + (length >= 16) + (length >= 24)
+    # 0-2: weak, 3: fair, 4: good, 5: strong, 6: excellent
+    return score
+
+def strength_text_color(score):
+    return [
+        ("Very Weak", "#c00"),
+        ("Weak", "#f00"),
+        ("Fair", "#e69500"),
+        ("Good", "#1a8"),
+        ("Strong", "#282"),
+        ("Excellent", "#174")
+    ][min(score, 5)]
+
+# --- AUTOLCOK/TIMEOUT ---
+class AutoLocker:
+    def __init__(self, timeout, lock_callback):
+        self.timeout = timeout
+        self.lock_callback = lock_callback
+        self.timer = None
+        self.active = True
+
+    def reset(self):
+        if self.timer and self.timer.is_alive():
+            self.timer.cancel()
+        self.timer = threading.Timer(self.timeout, self.lock)
+        self.timer.start()
+
+    def lock(self):
+        if self.active:
+            self.lock_callback()
+
+    def stop(self):
+        self.active = False
+        if self.timer and self.timer.is_alive():
+            self.timer.cancel()
+
+# --- THEME SUPPORT ---
+def get_theme():
+    return "dark" if os.path.exists(THEME_FILE) and open(THEME_FILE).read().strip() == "dark" else "light"
+
+def set_theme(theme):
+    with open(THEME_FILE, "w") as f:
+        f.write(theme)
+
+def apply_theme(root, theme):
+    style = ttk.Style()
+    if theme == "dark":
         style.theme_use("clam")
-        style.configure("TButton", font=("Segoe UI", 11), padding=8)
-        style.configure("Accent.TButton", font=("Segoe UI", 11, "bold"), padding=8, foreground="#fff", background="#0078d7")
-        style.map("Accent.TButton", background=[("active", "#005a9e")])
-        style.configure("TLabel", font=("Segoe UI", 11))
-        style.configure("Header.TLabel", font=("Segoe UI", 17, "bold"))
+        style.configure(".", background="#252526", foreground="#e7e7e7")
+        style.configure("TLabel", background="#252526", foreground="#e7e7e7")
+        style.configure("TButton", background="#2d2d30", foreground="#e7e7e7")
+        root.configure(bg="#252526")
+    else:
+        style.theme_use("default")
+        style.configure(".", background="#f7f7f7", foreground="#222")
+        style.configure("TLabel", background="#f7f7f7", foreground="#222")
+        style.configure("TButton", background="#e7e7e7", foreground="#222")
+        root.configure(bg="#f7f7f7")
 
-        # Authentication
-        self.authenticate()
-        if not getattr(self, "authenticated", False):
-            self.master.destroy()
+# --- BIOMETRIC UNLOCK (Windows Hello stub, fallback to master password) ---
+def biometric_available():
+    return platform.system() == "Windows" and "win32com" in sys.modules
+
+def try_biometric():
+    if platform.system() == "Windows":
+        try:
+            # Windows Hello stub
+            shell = win32com.client.Dispatch("WScript.Shell")
+            result = shell.Popup("Authenticate with Windows Hello (stub for demo)\nClick OK to proceed.", 5, "Windows Hello", 0)
+            return result == 1
+        except Exception:
+            return False
+    return False
+
+# --- BREACH CHECK (HIBP password hash API) ---
+def check_breach(password):
+    sha1pw = hashlib.sha1(password.encode()).hexdigest().upper()
+    prefix = sha1pw[:5]
+    suffix = sha1pw[5:]
+    try:
+        r = requests.get(f"https://api.pwnedpasswords.com/range/{prefix}")
+        for line in r.text.splitlines():
+            if line.startswith(suffix):
+                return True
+        return False
+    except Exception:
+        return None  # Could not check
+
+# --- MAIN GUI APP ---
+class MasterPasswordDialog(simpledialog.Dialog):
+    def __init__(self, parent, is_setting=False):
+        self.is_setting = is_setting
+        super().__init__(parent, "Set Master Password" if is_setting else "Enter Master Password")
+
+    def body(self, frame):
+        if self.is_setting:
+            ttk.Label(frame, text="Set your master password (min 8 chars):").pack()
+            self.pw_var = tk.StringVar()
+            self.re_var = tk.StringVar()
+            ttk.Entry(frame, textvariable=self.pw_var, show="*", width=30).pack()
+            ttk.Label(frame, text="Re-enter master password:").pack()
+            ttk.Entry(frame, textvariable=self.re_var, show="*", width=30).pack()
+        else:
+            ttk.Label(frame, text="Enter your master password:").pack()
+            self.pw_var = tk.StringVar()
+            ttk.Entry(frame, textvariable=self.pw_var, show="*", width=30).pack()
+        return frame
+
+    def validate(self):
+        if self.is_setting:
+            pw = self.pw_var.get()
+            re = self.re_var.get()
+            if len(pw) < 8:
+                messagebox.showerror("Error", "Password must be at least 8 characters.")
+                return False
+            if pw != re:
+                messagebox.showerror("Error", "Passwords do not match.")
+                return False
+            self.result = pw
+            return True
+        else:
+            pw = self.pw_var.get()
+            if not pw:
+                messagebox.showerror("Error", "Enter your master password.")
+                return False
+            self.result = pw
+            return True
+
+# --- MAIN APP CLASS ---
+class PasswordsToGoApp:
+    def __init__(self, root):
+        self.root = root
+        self.theme = get_theme()
+        apply_theme(self.root, self.theme)
+        self.autolocker = AutoLocker(AUTOLCK_TIMEOUT, self.lock_app)
+        self.vault = load_vault()
+        self.unlocked = False
+        self.masterpw = None
+        self.init_login()
+
+    def lock_app(self):
+        self.unlocked = False
+        for widget in self.root.winfo_children():
+            widget.destroy()
+        self.init_login()
+
+    def unlock_app(self):
+        self.unlocked = True
+        for widget in self.root.winfo_children():
+            widget.destroy()
+        self.init_main()
+        self.autolocker.reset()
+
+    def init_login(self):
+        self.root.title("PasswordsToGo - Locked")
+        f = ttk.Frame(self.root, padding=40)
+        f.pack(fill="both", expand=True)
+        ttk.Label(f, text="PasswordsToGo", font=("Segoe UI", 22, "bold"), foreground="#0078d7").pack(pady=(0,18))
+        if not masterpw_is_set():
+            dlg = MasterPasswordDialog(self.root, is_setting=True)
+            if dlg.result is None:
+                self.root.destroy()
+                return
+            set_master_password(dlg.result)
+            messagebox.showinfo("Master Password Set", "Master password set! Please remember it.")
+        # Biometric unlock if available
+        if biometric_available():
+            if try_biometric():
+                self.masterpw = None
+                self.unlock_app()
+                return
+        # Fallback to master password
+        dlg = MasterPasswordDialog(self.root)
+        if dlg.result is None:
+            self.root.destroy()
             return
+        if verify_master_password(dlg.result):
+            self.masterpw = dlg.result
+            self.unlock_app()
+        else:
+            messagebox.showerror("Error", "Incorrect master password.")
+            self.root.destroy()
 
-        self.passwords = load_passwords()
-        self.init_gui()
-
-    def authenticate(self):
-        # Set PIN if not set
-        if not pin_is_set():
-            pin = PinDialog(self.master, "Set PIN", is_setting=True).result
-            if pin is None:
-                return
-            set_pin(pin)
-            messagebox.showinfo("PIN Set", "PIN set! Please remember it. You’ll be asked for it when you open PasswordsToGo.")
-        # Enter PIN
-        for _ in range(3):
-            pin = PinDialog(self.master, "Enter PIN").result
-            if pin is None:
-                return
-            if verify_pin(pin):
-                self.authenticated = True
-                self.master.deiconify()
-                return
-            else:
-                messagebox.showerror("PIN Error", "Incorrect PIN. Try again.")
-        messagebox.showwarning("Too Many Attempts", "Too many incorrect PIN attempts.\nExiting app.")
-        self.authenticated = False
-
-    def init_gui(self):
-        self.master.title("🔒 PasswordsToGo")
-        self.master.geometry("420x340")
-        self.master.configure(bg="#f7f7f7")
-        self.master.resizable(False, False)
-        frame = ttk.Frame(self.master, padding=20)
+    def init_main(self):
+        self.root.title("PasswordsToGo")
+        frame = ttk.Frame(self.root, padding=20)
         frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="PasswordsToGo", font=("Segoe UI", 19, "bold"), foreground="#0078d7").pack(pady=(0, 18))
 
-        ttk.Label(frame, text="PasswordsToGo", style="Header.TLabel", foreground="#0078d7").pack(pady=(0, 18))
+        # Theme switcher
+        theme_btn = ttk.Button(frame, text="Dark Mode" if self.theme == "light" else "Light Mode",
+                               command=self.toggle_theme)
+        theme_btn.pack(pady=(0,10), anchor="ne")
+        # Main buttons
+        ttk.Button(frame, text="Add / Generate Password", command=self.add_password).pack(fill="x", pady=4)
+        ttk.Button(frame, text="View All Passwords", command=self.view_passwords).pack(fill="x", pady=4)
+        ttk.Button(frame, text="Search Passwords", command=self.search_passwords).pack(fill="x", pady=4)
+        ttk.Button(frame, text="Favorites / Most Used", command=self.show_favorites).pack(fill="x", pady=4)
+        ttk.Button(frame, text="Secure Notes", command=self.secure_notes).pack(fill="x", pady=4)
+        ttk.Button(frame, text="Vault Export/Import", command=self.export_import).pack(fill="x", pady=4)
+        ttk.Button(frame, text="Settings", command=self.settings_dialog).pack(fill="x", pady=4)
+        ttk.Button(frame, text="Lock", command=self.lock_app).pack(fill="x", pady=12)
 
-        ttk.Button(frame, text="Add New Password", style="Accent.TButton", width=38, command=self.add_password).pack(pady=7)
-        ttk.Button(frame, text="View Passwords", width=38, command=self.view_passwords).pack(pady=7)
-        ttk.Button(frame, text="Search Password", width=38, command=self.search_password).pack(pady=7)
-        ttk.Button(frame, text="Change PIN", width=38, command=self.change_pin).pack(pady=7)
-        ttk.Button(frame, text="Exit", width=38, command=self.master.quit).pack(pady=(20, 0))
+    def toggle_theme(self):
+        self.theme = "dark" if self.theme == "light" else "light"
+        set_theme(self.theme)
+        apply_theme(self.root, self.theme)
+        self.lock_app()
 
     def add_password(self):
+        # Password creation dialog with strength meter, 2FA, breach check, generator options, etc.
+        add_win = tk.Toplevel(self.root)
+        add_win.title("Add / Generate Password")
+        apply_theme(add_win, self.theme)
+        frame = ttk.Frame(add_win, padding=16)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="Add New Password", font=("Segoe UI", 13, "bold"), foreground="#0078d7").pack(pady=(0,10))
+
+        site_var = tk.StringVar()
+        user_var = tk.StringVar()
+        pw_var = tk.StringVar()
+        note_var = tk.StringVar()
+        fav_var = tk.BooleanVar()
+        twofa_var = tk.StringVar()
+        pw_history = []
+
+        # Password generator options
+        gen_length = tk.IntVar(value=16)
+        use_upper = tk.BooleanVar(value=True)
+        use_lower = tk.BooleanVar(value=True)
+        use_digits = tk.BooleanVar(value=True)
+        use_symbols = tk.BooleanVar(value=True)
+        exclude_amb = tk.BooleanVar(value=False)
+
+        # Form fields
+        ttk.Label(frame, text="Site/App:").pack(anchor="w")
+        ttk.Entry(frame, textvariable=site_var, width=34).pack()
+        ttk.Label(frame, text="Username/Email:").pack(anchor="w", pady=(6,0))
+        ttk.Entry(frame, textvariable=user_var, width=34).pack()
+        ttk.Label(frame, text="Password:").pack(anchor="w", pady=(6,0))
+        pwentry = ttk.Entry(frame, textvariable=pw_var, show="*", width=26)
+        pwentry.pack(side="left")
+        showbtn = ttk.Button(frame, text="Show", width=7, command=lambda: pwentry.config(show="" if pwentry.cget("show") == "*" else "*"))
+        showbtn.pack(side="left", padx=4)
+
+        # Password strength meter
+        strlabel = ttk.Label(frame, text="Strength: ")
+        strlabel.pack(anchor="w")
+        def update_strength(*_):
+            score = password_strength(pw_var.get())
+            txt, color = strength_text_color(score)
+            strlabel.config(text=f"Strength: {txt}", foreground=color)
+        pw_var.trace_add("write", update_strength)
+
+        # Breach check button
+        def breach_check():
+            pw = pw_var.get()
+            if not pw:
+                messagebox.showwarning("Breach Check", "No password entered.")
+                return
+            result = check_breach(pw)
+            if result is None:
+                messagebox.showinfo("Breach Check", "Could not check breach status (no internet?).")
+            elif result:
+                messagebox.showwarning("Breach Check", "This password has appeared in a breach! Please use another.")
+            else:
+                messagebox.showinfo("Breach Check", "This password has not been found in known breaches.")
+
+        ttk.Button(frame, text="Check Breach", command=breach_check).pack(anchor="w", pady=2)
+
+        # Password generator controls
+        def do_generate():
+            pw = generate_password(
+                length=gen_length.get(),
+                use_upper=use_upper.get(),
+                use_lower=use_lower.get(),
+                use_digits=use_digits.get(),
+                use_symbols=use_symbols.get(),
+                exclude_ambiguous=exclude_amb.get()
+            )
+            pw_var.set(pw)
+        ttk.Label(frame, text="Generator Options:").pack(anchor="w", pady=(8,0))
+        opts = ttk.Frame(frame)
+        opts.pack(anchor="w")
+        ttk.Checkbutton(opts, text="Uppercase", variable=use_upper).pack(side="left")
+        ttk.Checkbutton(opts, text="Lowercase", variable=use_lower).pack(side="left")
+        ttk.Checkbutton(opts, text="Digits", variable=use_digits).pack(side="left")
+        ttk.Checkbutton(opts, text="Symbols", variable=use_symbols).pack(side="left")
+        ttk.Checkbutton(opts, text="No ambiguous", variable=exclude_amb).pack(side="left")
+        ttk.Label(frame, text="Length:").pack(anchor="w")
+        ttk.Scale(frame, from_=8, to=64, orient="horizontal", variable=gen_length).pack(fill="x")
+        ttk.Button(frame, text="Generate", command=do_generate).pack(anchor="w", pady=4)
+
+        # 2FA and other fields
+        ttk.Label(frame, text="2FA Backup Codes / TOTP:").pack(anchor="w", pady=(8,0))
+        ttk.Entry(frame, textvariable=twofa_var, width=34).pack()
+        ttk.Checkbutton(frame, text="Favorite", variable=fav_var).pack(anchor="w", pady=(2,0))
+        ttk.Label(frame, text="Note:").pack(anchor="w")
+        ttk.Entry(frame, textvariable=note_var, width=34).pack()
+
         def on_submit():
             site = site_var.get().strip()
             user = user_var.get().strip()
             pw = pw_var.get().strip()
-            if not site or not user:
-                messagebox.showerror("Missing Info", "Site and Username/Email are required.")
+            note = note_var.get().strip()
+            fav = fav_var.get()
+            twofa = twofa_var.get().strip()
+            if not site or not user or not pw:
+                messagebox.showerror("Error", "Site, Username, and Password are required.")
                 return
-            if not pw:
-                pw = generate_password()
-                pw_var.set(pw)
-            encrypted_pw = encrypt(pw)
-            if site not in self.passwords:
-                self.passwords[site] = []
-            self.passwords[site].append({"user": user, "password": encrypted_pw})
-            save_passwords(self.passwords)
-            pyperclip.copy(pw)
-            messagebox.showinfo("Password Saved", "Password saved and copied to clipboard!")
+            # Add to history
+            timestamp = int(time.time())
+            history = [{"pw": encrypt(pw), "changed": timestamp}]
+            # Save entry
+            entry = {
+                "site": site,
+                "user": user,
+                "password": encrypt(pw),
+                "note": encrypt(note),
+                "favorite": fav,
+                "twofa": encrypt(twofa),
+                "history": history,
+                "used": 0,
+                "created": timestamp
+            }
+            self.vault["entries"].append(entry)
+            save_vault(self.vault)
+            clipboard.copy(pw)
+            messagebox.showinfo("Saved", "Password saved and copied to clipboard!")
             add_win.destroy()
 
-        add_win = tk.Toplevel(self.master)
-        add_win.title("Add New Password")
-        add_win.geometry("370x260")
-        add_win.resizable(False, False)
-        frame = ttk.Frame(add_win, padding=20)
-        frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="Add a New Password", style="Header.TLabel", foreground="#0078d7").pack(pady=(0, 10))
-        site_var = tk.StringVar()
-        user_var = tk.StringVar()
-        pw_var = tk.StringVar()
-
-        ttk.Label(frame, text="Site/App:").pack(anchor="w", pady=(10, 0))
-        ttk.Entry(frame, textvariable=site_var, width=34).pack()
-        ttk.Label(frame, text="Username/Email:").pack(anchor="w", pady=(10, 0))
-        ttk.Entry(frame, textvariable=user_var, width=34).pack()
-        ttk.Label(frame, text="Password (leave blank to generate):").pack(anchor="w", pady=(10, 0))
-        pw_entry = ttk.Entry(frame, textvariable=pw_var, width=34, show="*")
-        pw_entry.pack()
-        ttk.Button(frame, text="Show/Hide", width=10,
-                   command=lambda: pw_entry.config(show="" if pw_entry.cget("show") == "*" else "*")).pack(pady=2)
-        ttk.Button(frame, text="Save", style="Accent.TButton", width=18, command=on_submit).pack(pady=(18, 0))
+        ttk.Button(frame, text="Save", command=on_submit).pack(pady=12)
 
     def view_passwords(self):
-        top = tk.Toplevel(self.master)
-        top.title("Stored Passwords")
-        top.geometry("420x330")
-        frame = ttk.Frame(top, padding=12)
+        # List all passwords, show/hide, favorite toggle, copy, history, increment "used" count
+        vwin = tk.Toplevel(self.root)
+        vwin.title("All Passwords")
+        apply_theme(vwin, self.theme)
+        frame = ttk.Frame(vwin, padding=10)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="Stored Passwords", style="Header.TLabel", foreground="#0078d7").pack(pady=(0, 7))
-        lb_frame = ttk.Frame(frame)
-        lb_frame.pack(fill="both", expand=True)
-        scrollbar = ttk.Scrollbar(lb_frame)
-        scrollbar.pack(side="right", fill="y")
-        listbox = tk.Listbox(lb_frame, width=54, height=10, yscrollcommand=scrollbar.set, font=("Segoe UI", 10))
-        for site, entries in self.passwords.items():
-            for entry in entries:
-                listbox.insert("end", f"{site} | {entry['user']}")
-        listbox.pack(side="left", fill="both", expand=True)
-        scrollbar.config(command=listbox.yview)
-
-        def show_selected():
-            idx = listbox.curselection()
+        lb = tk.Listbox(frame, width=56, height=16)
+        lb.pack(side="left", fill="y")
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=lb.yview)
+        scrollbar.pack(side="left", fill="y")
+        lb.config(yscrollcommand=scrollbar.set)
+        entries = self.vault["entries"]
+        for idx, entry in enumerate(entries):
+            mark = "★ " if entry.get("favorite") else ""
+            lb.insert("end", f'{mark}{entry["site"]} | {entry["user"]}')
+        def show_selected(_=None):
+            idx = lb.curselection()
             if not idx:
                 return
-            selected = listbox.get(idx)
-            site, user = selected.split(" | ")
-            entry = next(e for e in self.passwords[site] if e['user'] == user)
-            pw = decrypt(entry["password"])
-            pwtop = tk.Toplevel(top)
-            pwtop.title("Password Details")
-            pwtop.geometry("350x220")
-            frame2 = ttk.Frame(pwtop, padding=16)
-            frame2.pack(fill="both", expand=True)
-            ttk.Label(frame2, text=f"Site: {site}", font=("Segoe UI", 11, "bold")).pack(anchor="w")
-            ttk.Label(frame2, text=f"User: {user}", font=("Segoe UI", 11)).pack(anchor="w", pady=(0,5))
-            ttk.Label(frame2, text="Password:", font=("Segoe UI", 11)).pack(anchor="w")
-            pw_var = tk.StringVar(value=pw)
-            pwentry = ttk.Entry(frame2, textvariable=pw_var, width=28, show="*")
-            pwentry.pack(anchor="w")
-            def toggle():
-                pwentry.config(show="" if pwentry.cget("show") == "*" else "*")
-            ttk.Button(frame2, text="Show/Hide", width=10, command=toggle).pack(anchor="w", pady=3)
-            ttk.Button(frame2, text="Copy to Clipboard", style="Accent.TButton", width=18,
-                       command=lambda: [pyperclip.copy(pw_var.get()), messagebox.showinfo("Copied", "Password copied to clipboard!")]).pack(pady=5)
+            entry = entries[idx[0]]
+            details = tk.Toplevel(vwin)
+            details.title("Entry Details")
+            apply_theme(details, self.theme)
+            dframe = ttk.Frame(details, padding=14)
+            dframe.pack(fill="both", expand=True)
+            ttk.Label(dframe, text=f'Site: {entry["site"]}', font=("Segoe UI", 12, "bold")).pack(anchor="w")
+            ttk.Label(dframe, text=f'User: {entry["user"]}', font=("Segoe UI", 11)).pack(anchor="w")
+            pw_val = decrypt(entry["password"])
+            pw_var = tk.StringVar(value=pw_val)
+            ttk.Label(dframe, text="Password:").pack(anchor="w")
+            pw_entry = ttk.Entry(dframe, textvariable=pw_var, width=34, show="*")
+            pw_entry.pack(anchor="w")
+            def toggle_pw():
+                pw_entry.config(show="" if pw_entry.cget("show") == "*" else "*")
+            ttk.Button(dframe, text="Show/Hide", width=9, command=toggle_pw).pack(anchor="w")
+            ttk.Button(dframe, text="Copy Password", command=lambda: [clipboard.copy(pw_var.get()), messagebox.showinfo("Copied", "Copied to clipboard!")]).pack(anchor="w", pady=3)
+            # 2FA
+            ttk.Label(dframe, text="2FA/TOTP:").pack(anchor="w")
+            totp_var = tk.StringVar(value=decrypt(entry.get("twofa", "")))
+            ttk.Entry(dframe, textvariable=totp_var, width=34).pack(anchor="w")
+            # Note
+            ttk.Label(dframe, text="Note:").pack(anchor="w")
+            note_val = decrypt(entry.get("note", ""))
+            ttk.Entry(dframe, width=34, state="readonly", font=("Segoe UI", 9), justify="left")
+            ttk.Label(dframe, text=note_val, font=("Segoe UI", 9)).pack(anchor="w")
+            # Favorite toggle
+            fav = entry.get("favorite", False)
+            def toggle_fav():
+                entry["favorite"] = not entry.get("favorite", False)
+                save_vault(self.vault)
+                details.destroy()
+            ttk.Button(dframe, text="Unfavorite" if fav else "Favorite", command=toggle_fav).pack(anchor="w", pady=3)
+            # Password history
+            ttk.Label(dframe, text="Password History:", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=3)
+            for hist in entry.get("history", []):
+                hist_pw = decrypt(hist["pw"])
+                changed = time.strftime("%Y-%m-%d %H:%M", time.localtime(hist["changed"]))
+                ttk.Label(dframe, text=f"{changed}: {hist_pw[:3]}... ({len(hist_pw)} chars)").pack(anchor="w")
+            # Usage count
+            entry["used"] = entry.get("used", 0) + 1
+            save_vault(self.vault)
+        lb.bind("<<ListboxSelect>>", show_selected)
 
-        ttk.Button(frame, text="Show Details", style="Accent.TButton", width=20, command=show_selected).pack(pady=8)
-
-    def search_password(self):
-        query = simpledialog.askstring("Search", "Enter site or username to search for:")
-        if not query:
-            return
-        results = []
-        for site, entries in self.passwords.items():
-            if query.lower() in site.lower():
-                for entry in entries:
-                    results.append((site, entry["user"]))
-            else:
-                for entry in entries:
-                    if query.lower() in entry["user"].lower():
-                        results.append((site, entry["user"]))
+    def search_passwords(self):
+        # Search by site/user
+        q = simpledialog.askstring("Search", "Enter site or username:")
+        if not q: return
+        q = q.lower()
+        results = [e for e in self.vault["entries"] if q in e["site"].lower() or q in e["user"].lower()]
         if not results:
             messagebox.showinfo("No Results", "No matching passwords found.")
             return
-        top = tk.Toplevel(self.master)
-        top.title("Search Results")
-        top.geometry("420x240")
-        frame = ttk.Frame(top, padding=10)
+        self.show_entries_list(results, title="Search Results")
+
+    def show_favorites(self):
+        favs = [e for e in self.vault["entries"] if e.get("favorite")]
+        used = sorted(self.vault["entries"], key=lambda e: e.get("used", 0), reverse=True)[:10]
+        win = tk.Toplevel(self.root)
+        win.title("Favorites / Most Used")
+        apply_theme(win, self.theme)
+        f = ttk.Frame(win, padding=10)
+        f.pack(fill="both", expand=True)
+        ttk.Label(f, text="Favorites", font=("Segoe UI", 11, "bold")).pack()
+        for entry in favs:
+            ttk.Label(f, text=f'{entry["site"]} | {entry["user"]}').pack(anchor="w")
+        ttk.Label(f, text="Most Used", font=("Segoe UI", 11, "bold")).pack(pady=(10,0))
+        for entry in used:
+            ttk.Label(f, text=f'{entry["site"]} | {entry["user"]} (used {entry.get("used",0)}x)').pack(anchor="w")
+
+    def secure_notes(self):
+        notes_win = tk.Toplevel(self.root)
+        notes_win.title("Secure Notes")
+        apply_theme(notes_win, self.theme)
+        frame = ttk.Frame(notes_win, padding=10)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="Search Results", style="Header.TLabel", foreground="#0078d7").pack(pady=(0, 7))
-        listbox = tk.Listbox(frame, width=54, height=7, font=("Segoe UI", 10))
-        for site, user in results:
-            listbox.insert("end", f"{site} | {user}")
-        listbox.pack(fill="both", expand=True)
-        def show_selected():
-            idx = listbox.curselection()
+        ttk.Label(frame, text="Secure Notes", font=("Segoe UI", 13, "bold")).pack()
+        notes = self.vault.get("notes", [])
+        lb = tk.Listbox(frame, width=54, height=10)
+        lb.pack(side="left", fill="y")
+        for note in notes:
+            title = decrypt(note["title"])
+            lb.insert("end", title)
+        def show_note():
+            idx = lb.curselection()
+            if not idx: return
+            note = notes[idx[0]]
+            title = decrypt(note["title"])
+            body = decrypt(note["body"])
+            nw = tk.Toplevel(notes_win)
+            nw.title(title)
+            apply_theme(nw, self.theme)
+            f = ttk.Frame(nw, padding=10)
+            f.pack(fill="both", expand=True)
+            ttk.Label(f, text=title, font=("Segoe UI", 13, "bold")).pack()
+            tk.Text(f, height=12, width=40, wrap="word").insert("end", body)
+        lb.bind("<<ListboxSelect>>", lambda e: show_note())
+        def add_note():
+            title = simpledialog.askstring("Note Title", "Title:")
+            body = simpledialog.askstring("Note Body", "Body:")
+            if title and body:
+                notes.append({"title": encrypt(title), "body": encrypt(body)})
+                save_vault(self.vault)
+                lb.insert("end", title)
+        ttk.Button(frame, text="Add Note", command=add_note).pack()
+
+    def export_import(self):
+        # Export/import vault as encrypted file
+        win = tk.Toplevel(self.root)
+        win.title("Export/Import Vault")
+        apply_theme(win, self.theme)
+        f = ttk.Frame(win, padding=10)
+        f.pack(fill="both", expand=True)
+        ttk.Label(f, text="Export/Import Vault", font=("Segoe UI", 13, "bold")).pack()
+        ttk.Button(f, text="Export Vault", command=lambda: self.export_vault_dialog()).pack(pady=5)
+        ttk.Button(f, text="Import Vault", command=lambda: self.import_vault_dialog()).pack(pady=5)
+
+    def export_vault_dialog(self):
+        path = filedialog.asksaveasfilename(title="Export Vault", defaultextension=".ptg", filetypes=[("PasswordsToGo Vault", "*.ptg")])
+        if not path: return
+        export_vault(path, self.vault)
+        messagebox.showinfo("Export", "Vault exported successfully.")
+
+    def import_vault_dialog(self):
+        path = filedialog.askopenfilename(title="Import Vault", filetypes=[("PasswordsToGo Vault", "*.ptg")])
+        if not path: return
+        if import_vault(path):
+            self.vault = load_vault()
+            messagebox.showinfo("Import", "Vault imported successfully.")
+            self.lock_app()
+        else:
+            messagebox.showerror("Import", "Failed to import vault.")
+
+    def settings_dialog(self):
+        win = tk.Toplevel(self.root)
+        win.title("Settings")
+        apply_theme(win, self.theme)
+        f = ttk.Frame(win, padding=10)
+        f.pack(fill="both", expand=True)
+        ttk.Label(f, text="Settings", font=("Segoe UI", 13, "bold")).pack()
+        ttk.Label(f, text="Auto-lock Timeout (seconds):").pack(anchor="w")
+        timeout_var = tk.IntVar(value=AUTOLCK_TIMEOUT)
+        ttk.Entry(f, textvariable=timeout_var, width=8).pack(anchor="w")
+        def save_settings():
+            global AUTOLCK_TIMEOUT
+            AUTOLCK_TIMEOUT = timeout_var.get()
+            self.autolocker.timeout = AUTOLCK_TIMEOUT
+            messagebox.showinfo("Saved", "Settings saved.")
+            win.destroy()
+        ttk.Button(f, text="Save", command=save_settings).pack()
+
+    def show_entries_list(self, entries, title="Entries"):
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        apply_theme(win, self.theme)
+        frame = ttk.Frame(win, padding=10)
+        frame.pack(fill="both", expand=True)
+        lb = tk.Listbox(frame, width=56, height=16)
+        lb.pack(side="left", fill="y")
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=lb.yview)
+        scrollbar.pack(side="left", fill="y")
+        lb.config(yscrollcommand=scrollbar.set)
+        for entry in entries:
+            mark = "★ " if entry.get("favorite") else ""
+            lb.insert("end", f'{mark}{entry["site"]} | {entry["user"]}')
+        def show_selected(_=None):
+            idx = lb.curselection()
             if not idx:
                 return
-            selected = listbox.get(idx)
-            site, user = selected.split(" | ")
-            entry = next(e for e in self.passwords[site] if e['user'] == user)
-            pw = decrypt(entry["password"])
-            pwtop = tk.Toplevel(top)
-            pwtop.title("Password Details")
-            pwtop.geometry("350x220")
-            frame2 = ttk.Frame(pwtop, padding=16)
-            frame2.pack(fill="both", expand=True)
-            ttk.Label(frame2, text=f"Site: {site}", font=("Segoe UI", 11, "bold")).pack(anchor="w")
-            ttk.Label(frame2, text=f"User: {user}", font=("Segoe UI", 11)).pack(anchor="w", pady=(0,5))
-            ttk.Label(frame2, text="Password:", font=("Segoe UI", 11)).pack(anchor="w")
-            pw_var = tk.StringVar(value=pw)
-            pwentry = ttk.Entry(frame2, textvariable=pw_var, width=28, show="*")
-            pwentry.pack(anchor="w")
-            def toggle():
-                pwentry.config(show="" if pwentry.cget("show") == "*" else "*")
-            ttk.Button(frame2, text="Show/Hide", width=10, command=toggle).pack(anchor="w", pady=3)
-            ttk.Button(frame2, text="Copy to Clipboard", style="Accent.TButton", width=18,
-                       command=lambda: [pyperclip.copy(pw_var.get()), messagebox.showinfo("Copied", "Password copied to clipboard!")]).pack(pady=5)
-        ttk.Button(frame, text="Show Details", style="Accent.TButton", width=20, command=show_selected).pack(pady=8)
-
-    def change_pin(self):
-        # Only allow if they enter the current PIN
-        pin = PinDialog(self.master, "Enter Old PIN").result
-        if pin is None or not verify_pin(pin):
-            messagebox.showerror("PIN Error", "Incorrect current PIN.")
-            return
-        new_pin = PinDialog(self.master, "Set New PIN", is_setting=True).result
-        if new_pin is None:
-            return
-        set_pin(new_pin)
-        messagebox.showinfo("PIN Changed", "PIN changed successfully.")
+            entry = entries[idx[0]]
+            details = tk.Toplevel(win)
+            details.title("Entry Details")
+            apply_theme(details, self.theme)
+            dframe = ttk.Frame(details, padding=14)
+            dframe.pack(fill="both", expand=True)
+            ttk.Label(dframe, text=f'Site: {entry["site"]}', font=("Segoe UI", 12, "bold")).pack(anchor="w")
+            ttk.Label(dframe, text=f'User: {entry["user"]}', font=("Segoe UI", 11)).pack(anchor="w")
+            pw_val = decrypt(entry["password"])
+            pw_var = tk.StringVar(value=pw_val)
+            ttk.Label(dframe, text="Password:").pack(anchor="w")
+            pw_entry = ttk.Entry(dframe, textvariable=pw_var, width=34, show="*")
+            pw_entry.pack(anchor="w")
+            def toggle_pw():
+                pw_entry.config(show="" if pw_entry.cget("show") == "*" else "*")
+            ttk.Button(dframe, text="Show/Hide", width=9, command=toggle_pw).pack(anchor="w")
+            ttk.Button(dframe, text="Copy Password", command=lambda: [clipboard.copy(pw_var.get()), messagebox.showinfo("Copied", "Copied to clipboard!")]).pack(anchor="w", pady=3)
+        lb.bind("<<ListboxSelect>>", show_selected)
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = PasswordManagerGUI(root)
-    if getattr(app, "authenticated", True):
+    root.geometry("480x600")
+    app = PasswordsToGoApp(root)
+    if getattr(app, "unlocked", True):
         root.mainloop()
