@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
+## [0.2.0]
 
 ### Added
 - **Master Password:** Replaces the PIN system. Users now set a master password (minimum 8 characters) for unlocking the app, increasing security.
