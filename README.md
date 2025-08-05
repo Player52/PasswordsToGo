@@ -67,6 +67,7 @@ We welcome contributions! To do this, please go to the GitHub page where you dow
 4. **Open a Pull Request** describing your changes.
 
 Please make sure your code is clear and well-documented. For major changes, open an Issue first to discuss your ideas.
+**We also have a full page on contributing. This can be found on our GitHub.**
 
 ---
 
