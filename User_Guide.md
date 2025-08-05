@@ -164,4 +164,3 @@ Welcome to **PasswordsToGo**, your secure, easy-to-use password manager and gene
 
 **Stay safe!**  
 PasswordsToGo Team
-**Player52 - Owner and Head Admin**
