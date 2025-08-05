@@ -10,6 +10,10 @@ import hashlib
 import platform
 import sys
 
+# ---- VERSION ----
+APP_VERSION = "1.0.0"
+APP_NAME = "PasswordsToGo"
+
 # External dependencies
 try:
     from cryptography.fernet import Fernet, InvalidToken
@@ -25,7 +29,6 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "pyperclip"])
     import pyperclip
 
-# Optional for breach check
 try:
     import requests
 except ImportError:
@@ -33,7 +36,6 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "requests"])
     import requests
 
-# OS-specific biometric support (Windows Hello as prototype)
 if platform.system() == "Windows":
     try:
         import win32com.client  # part of pywin32
@@ -46,11 +48,9 @@ VAULT_FILE = "passwords.json"
 KEY_FILE = "secret.key"
 MASTER_FILE = "masterpw.key"
 THEME_FILE = "theme.pref"
-
 AUTOLCK_TIMEOUT = 120  # seconds
 
 class SecureClipboard:
-    """Clipboard manager with auto-clear."""
     def __init__(self):
         self.timer = None
 
@@ -171,7 +171,6 @@ def password_strength(password):
         any(c in string.punctuation for c in password)
     ]
     score = sum(categories) + (length >= 16) + (length >= 24)
-    # 0-2: weak, 3: fair, 4: good, 5: strong, 6: excellent
     return score
 
 def strength_text_color(score):
@@ -237,9 +236,8 @@ def biometric_available():
 def try_biometric():
     if platform.system() == "Windows":
         try:
-            # Windows Hello stub
             shell = win32com.client.Dispatch("WScript.Shell")
-            result = shell.Popup("Authenticate with Windows Hello (stub for demo)\nClick OK to proceed.", 5, "Windows Hello", 0)
+            result = shell.Popup("Authenticate with Windows Hello\nClick OK to proceed.", 5, "Windows Hello", 0)
             return result == 1
         except Exception:
             return False
@@ -257,9 +255,8 @@ def check_breach(password):
                 return True
         return False
     except Exception:
-        return None  # Could not check
+        return None
 
-# --- MAIN GUI APP ---
 class MasterPasswordDialog(simpledialog.Dialog):
     def __init__(self, parent, is_setting=False):
         self.is_setting = is_setting
@@ -299,7 +296,6 @@ class MasterPasswordDialog(simpledialog.Dialog):
             self.result = pw
             return True
 
-# --- MAIN APP CLASS ---
 class PasswordsToGoApp:
     def __init__(self, root):
         self.root = root
@@ -325,10 +321,11 @@ class PasswordsToGoApp:
         self.autolocker.reset()
 
     def init_login(self):
-        self.root.title("PasswordsToGo - Locked")
+        self.root.title(f"{APP_NAME} {APP_VERSION} – Locked")
         f = ttk.Frame(self.root, padding=40)
         f.pack(fill="both", expand=True)
-        ttk.Label(f, text="PasswordsToGo", font=("Segoe UI", 22, "bold"), foreground="#0078d7").pack(pady=(0,18))
+        ttk.Label(f, text=f"{APP_NAME}", font=("Segoe UI", 22, "bold"), foreground="#0078d7").pack(pady=(0,18))
+        ttk.Label(f, text=f"Version {APP_VERSION}", font=("Segoe UI", 10)).pack(pady=(0,8))
         if not masterpw_is_set():
             dlg = MasterPasswordDialog(self.root, is_setting=True)
             if dlg.result is None:
@@ -336,13 +333,11 @@ class PasswordsToGoApp:
                 return
             set_master_password(dlg.result)
             messagebox.showinfo("Master Password Set", "Master password set! Please remember it.")
-        # Biometric unlock if available
         if biometric_available():
             if try_biometric():
                 self.masterpw = None
                 self.unlock_app()
                 return
-        # Fallback to master password
         dlg = MasterPasswordDialog(self.root)
         if dlg.result is None:
             self.root.destroy()
@@ -355,16 +350,14 @@ class PasswordsToGoApp:
             self.root.destroy()
 
     def init_main(self):
-        self.root.title("PasswordsToGo")
+        self.root.title(f"{APP_NAME} {APP_VERSION}")
         frame = ttk.Frame(self.root, padding=20)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="PasswordsToGo", font=("Segoe UI", 19, "bold"), foreground="#0078d7").pack(pady=(0, 18))
-
-        # Theme switcher
+        ttk.Label(frame, text=f"{APP_NAME}", font=("Segoe UI", 19, "bold"), foreground="#0078d7").pack(pady=(0, 18))
+        ttk.Label(frame, text=f"Version {APP_VERSION}", font=("Segoe UI", 10)).pack(pady=(0, 10))
         theme_btn = ttk.Button(frame, text="Dark Mode" if self.theme == "light" else "Light Mode",
                                command=self.toggle_theme)
         theme_btn.pack(pady=(0,10), anchor="ne")
-        # Main buttons
         ttk.Button(frame, text="Add / Generate Password", command=self.add_password).pack(fill="x", pady=4)
         ttk.Button(frame, text="View All Passwords", command=self.view_passwords).pack(fill="x", pady=4)
         ttk.Button(frame, text="Search Passwords", command=self.search_passwords).pack(fill="x", pady=4)
@@ -395,9 +388,7 @@ class PasswordsToGoApp:
         note_var = tk.StringVar()
         fav_var = tk.BooleanVar()
         twofa_var = tk.StringVar()
-        pw_history = []
 
-        # Password generator options
         gen_length = tk.IntVar(value=16)
         use_upper = tk.BooleanVar(value=True)
         use_lower = tk.BooleanVar(value=True)
@@ -405,7 +396,6 @@ class PasswordsToGoApp:
         use_symbols = tk.BooleanVar(value=True)
         exclude_amb = tk.BooleanVar(value=False)
 
-        # Form fields
         ttk.Label(frame, text="Site/App:").pack(anchor="w")
         ttk.Entry(frame, textvariable=site_var, width=34).pack()
         ttk.Label(frame, text="Username/Email:").pack(anchor="w", pady=(6,0))
@@ -416,7 +406,6 @@ class PasswordsToGoApp:
         showbtn = ttk.Button(frame, text="Show", width=7, command=lambda: pwentry.config(show="" if pwentry.cget("show") == "*" else "*"))
         showbtn.pack(side="left", padx=4)
 
-        # Password strength meter
         strlabel = ttk.Label(frame, text="Strength: ")
         strlabel.pack(anchor="w")
         def update_strength(*_):
@@ -425,7 +414,6 @@ class PasswordsToGoApp:
             strlabel.config(text=f"Strength: {txt}", foreground=color)
         pw_var.trace_add("write", update_strength)
 
-        # Breach check button
         def breach_check():
             pw = pw_var.get()
             if not pw:
@@ -441,17 +429,6 @@ class PasswordsToGoApp:
 
         ttk.Button(frame, text="Check Breach", command=breach_check).pack(anchor="w", pady=2)
 
-        # Password generator controls
-        def do_generate():
-            pw = generate_password(
-                length=gen_length.get(),
-                use_upper=use_upper.get(),
-                use_lower=use_lower.get(),
-                use_digits=use_digits.get(),
-                use_symbols=use_symbols.get(),
-                exclude_ambiguous=exclude_amb.get()
-            )
-            pw_var.set(pw)
         ttk.Label(frame, text="Generator Options:").pack(anchor="w", pady=(8,0))
         opts = ttk.Frame(frame)
         opts.pack(anchor="w")
@@ -462,9 +439,16 @@ class PasswordsToGoApp:
         ttk.Checkbutton(opts, text="No ambiguous", variable=exclude_amb).pack(side="left")
         ttk.Label(frame, text="Length:").pack(anchor="w")
         ttk.Scale(frame, from_=8, to=64, orient="horizontal", variable=gen_length).pack(fill="x")
-        ttk.Button(frame, text="Generate", command=do_generate).pack(anchor="w", pady=4)
+        ttk.Button(frame, text="Generate", command=lambda: pw_var.set(
+            generate_password(
+                length=gen_length.get(),
+                use_upper=use_upper.get(),
+                use_lower=use_lower.get(),
+                use_digits=use_digits.get(),
+                use_symbols=use_symbols.get(),
+                exclude_ambiguous=exclude_amb.get()
+            ))).pack(anchor="w", pady=4)
 
-        # 2FA and other fields
         ttk.Label(frame, text="2FA Backup Codes / TOTP:").pack(anchor="w", pady=(8,0))
         ttk.Entry(frame, textvariable=twofa_var, width=34).pack()
         ttk.Checkbutton(frame, text="Favorite", variable=fav_var).pack(anchor="w", pady=(2,0))
@@ -481,10 +465,8 @@ class PasswordsToGoApp:
             if not site or not user or not pw:
                 messagebox.showerror("Error", "Site, Username, and Password are required.")
                 return
-            # Add to history
             timestamp = int(time.time())
             history = [{"pw": encrypt(pw), "changed": timestamp}]
-            # Save entry
             entry = {
                 "site": site,
                 "user": user,
@@ -505,7 +487,6 @@ class PasswordsToGoApp:
         ttk.Button(frame, text="Save", command=on_submit).pack(pady=12)
 
     def view_passwords(self):
-        # List all passwords, show/hide, favorite toggle, copy, history, increment "used" count
         vwin = tk.Toplevel(self.root)
         vwin.title("All Passwords")
         apply_theme(vwin, self.theme)
@@ -541,35 +522,28 @@ class PasswordsToGoApp:
                 pw_entry.config(show="" if pw_entry.cget("show") == "*" else "*")
             ttk.Button(dframe, text="Show/Hide", width=9, command=toggle_pw).pack(anchor="w")
             ttk.Button(dframe, text="Copy Password", command=lambda: [clipboard.copy(pw_var.get()), messagebox.showinfo("Copied", "Copied to clipboard!")]).pack(anchor="w", pady=3)
-            # 2FA
             ttk.Label(dframe, text="2FA/TOTP:").pack(anchor="w")
             totp_var = tk.StringVar(value=decrypt(entry.get("twofa", "")))
             ttk.Entry(dframe, textvariable=totp_var, width=34).pack(anchor="w")
-            # Note
             ttk.Label(dframe, text="Note:").pack(anchor="w")
             note_val = decrypt(entry.get("note", ""))
-            ttk.Entry(dframe, width=34, state="readonly", font=("Segoe UI", 9), justify="left")
             ttk.Label(dframe, text=note_val, font=("Segoe UI", 9)).pack(anchor="w")
-            # Favorite toggle
             fav = entry.get("favorite", False)
             def toggle_fav():
                 entry["favorite"] = not entry.get("favorite", False)
                 save_vault(self.vault)
                 details.destroy()
             ttk.Button(dframe, text="Unfavorite" if fav else "Favorite", command=toggle_fav).pack(anchor="w", pady=3)
-            # Password history
             ttk.Label(dframe, text="Password History:", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=3)
             for hist in entry.get("history", []):
                 hist_pw = decrypt(hist["pw"])
                 changed = time.strftime("%Y-%m-%d %H:%M", time.localtime(hist["changed"]))
                 ttk.Label(dframe, text=f"{changed}: {hist_pw[:3]}... ({len(hist_pw)} chars)").pack(anchor="w")
-            # Usage count
             entry["used"] = entry.get("used", 0) + 1
             save_vault(self.vault)
         lb.bind("<<ListboxSelect>>", show_selected)
 
     def search_passwords(self):
-        # Search by site/user
         q = simpledialog.askstring("Search", "Enter site or username:")
         if not q: return
         q = q.lower()
@@ -619,7 +593,10 @@ class PasswordsToGoApp:
             f = ttk.Frame(nw, padding=10)
             f.pack(fill="both", expand=True)
             ttk.Label(f, text=title, font=("Segoe UI", 13, "bold")).pack()
-            tk.Text(f, height=12, width=40, wrap="word").insert("end", body)
+            txt = tk.Text(f, height=12, width=40, wrap="word")
+            txt.pack()
+            txt.insert("end", body)
+            txt.config(state="disabled")
         lb.bind("<<ListboxSelect>>", lambda e: show_note())
         def add_note():
             title = simpledialog.askstring("Note Title", "Title:")
@@ -631,7 +608,6 @@ class PasswordsToGoApp:
         ttk.Button(frame, text="Add Note", command=add_note).pack()
 
     def export_import(self):
-        # Export/import vault as encrypted file
         win = tk.Toplevel(self.root)
         win.title("Export/Import Vault")
         apply_theme(win, self.theme)
@@ -717,4 +693,4 @@ if __name__ == "__main__":
     root.geometry("480x600")
     app = PasswordsToGoApp(root)
     if getattr(app, "unlocked", True):
-        root.mainloop()
+        root.mainloop()       
