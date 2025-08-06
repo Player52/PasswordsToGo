@@ -22,10 +22,14 @@ def derive_key(master_password, salt=None, iterations=200_000):
     return key, salt
 
 # --- Per-Entry Encryption (with IV) ---
-def encrypt_entry(data, key):
+def decrypt_entry(token, key):
     f = Fernet(key)
-    token = f.encrypt(data.encode())
-    return token.decode()
+    try:
+        return f.decrypt(token.encode()).decode()
+    except InvalidToken:
+        return "<Decryption Failed>"
+    except Exception as e:
+        return f"<Error: {e}>"
 
 def decrypt_entry(token, key):
     f = Fernet(key)
@@ -37,7 +41,7 @@ def decrypt_entry(token, key):
 # --- Password Reveal Protection (re-authenticate before reveal) ---
 def re_authenticate(master_password, stored_hash, salt):
     kdf = PBKDF2HMAC(
-        algorithm=hashlib.sha256(),
+        algorithm=hashes.SHA256(),
         length=32,
         salt=salt,
         iterations=200_000,
@@ -95,5 +99,8 @@ def warn_screenshot():
         print("Warning: Screenshots may expose sensitive data!")
 
 def clear_clipboard():
-    import pyperclip
-    pyperclip.copy("")
+    try:
+        import pyperclip
+        pyperclip.copy("")
+    except Exception as e:
+        print(f"Clipboard clear failed: {e}")
