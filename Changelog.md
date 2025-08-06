@@ -1,3 +1,5 @@
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/02def63c-b128-427b-b3ac-75c7898b81ab" />
+
 # Changelog
 
 All notable changes to **PasswordsToGo** will be documented in this file.
