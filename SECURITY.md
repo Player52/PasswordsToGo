@@ -8,7 +8,7 @@ We support and provide security updates for the latest official release of Passw
 
 | Version | Supported          |
 |---------|--------------------|
-| 1.0.x   | ✅ Yes             |
+| 1.0.0   | ✅ Yes             |
 | < 1.0   | ❌ No (Beta only)  |
 
 ---
@@ -21,7 +21,7 @@ If you discover a security vulnerability in PasswordsToGo, **please follow these
    Please report issues privately to the maintainers.
 
 2. **Contact:**  
-   Send an email to [security@player52.dev](mailto:security@player52.dev) or open a **private security advisory** via GitHub (if available).
+Open a **private security advisory** via GitHub (if available).
 
 3. **Include details:**  
    - A description of the vulnerability.
