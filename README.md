@@ -1,3 +1,5 @@
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/b0168017-6eb2-4ab9-99e2-990f9132ebf6" />
+
 # PasswordsToGo
 
 PasswordsToGo is your new secure password manager and password creator! We take your security seriously, so your passwords are always encrypted and never shared. Manage, store, and generate strong passwords with ease—right from your desktop.
