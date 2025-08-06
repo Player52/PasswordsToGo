@@ -1,3 +1,5 @@
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/54b349ac-a5f6-4ea2-9e60-7c7b504adddf" />
+
 # Contributor Covenant Code of Conduct
 
 ## Our Pledge
