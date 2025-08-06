@@ -1,3 +1,5 @@
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/a3815f1c-db0b-4adf-ba97-190b7bc9fd41" />
+
 # Contributing to PasswordsToGo
 
 Thank you for your interest in contributing to **PasswordsToGo**! We welcome all kinds of help: bug reports, feature requests, code improvements, documentation, and more.
