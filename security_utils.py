@@ -22,6 +22,10 @@ def derive_key(master_password, salt=None, iterations=200_000):
     return key, salt
 
 # --- Per-Entry Encryption (with IV) ---
+def encrypt_entry(data, key):
+    f = Fernet(key)
+    return f.encrypt(data.encode()).decode()
+
 def decrypt_entry(token, key):
     f = Fernet(key)
     try:
