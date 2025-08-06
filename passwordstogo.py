@@ -15,43 +15,12 @@ import sys
 APP_VERSION = "1.0.0"
 APP_NAME = "PasswordsToGo"
 # ---- File Support ----
+VAULT_FILE = "passwords.json"
 SALT_FILE = "master_salt.bin"
 HASH_FILE = "master_hash.bin"
-
-
-# External dependencies
-try:
-    from cryptography.fernet import Fernet, InvalidToken
-except ImportError:
-    import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "cryptography"])
-    from cryptography.fernet import Fernet, InvalidToken
-
-try:
-    import pyperclip
-except ImportError:
-    import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyperclip"])
-    import pyperclip
-
-try:
-    import requests
-except ImportError:
-    import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "requests"])
-    import requests
-
-if platform.system() == "Windows":
-    try:
-        import win32com.client  # part of pywin32
-    except ImportError:
-        import subprocess
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "pywin32"])
-        import win32com.client
-
-VAULT_FILE = "passwords.json"
-KEY_FILE = "secret.key"
-MASTER_FILE = "masterpw.key"
+HASH_VAULT_FILE = "vault.hash"
+SIGNATURE_FILE = "release.sig"
+PUBLIC_KEY_FILE = "public.pem"
 THEME_FILE = "theme.pref"
 AUTOLCK_TIMEOUT = 120  # seconds
 
@@ -71,35 +40,20 @@ class SecureClipboard:
 
 clipboard = SecureClipboard()
 
-# --- ENCRYPTION SETUP ---
-def generate_key():
-    key = Fernet.generate_key()
-    with open(KEY_FILE, "wb") as key_file:
-        key_file.write(key)
-    return key
+# --- Application Signing Verification ---
+def verify_release():
+    if not os.path.exists(SIGNATURE_FILE) or not os.path.exists(PUBLIC_KEY_FILE):
+        return True  # skip if not set up
+    return security_utils.verify_release(__file__, SIGNATURE_FILE, PUBLIC_KEY_FILE)
 
-def load_key():
-    if not os.path.exists(KEY_FILE):
-        return generate_key()
-    with open(KEY_FILE, "rb") as key_file:
-        return key_file.read()
-
-fernet = Fernet(load_key())
-
-def encrypt(text):
-    return fernet.encrypt(text.encode()).decode()
-
-def decrypt(token):
-    try:
-        return fernet.decrypt(token.encode()).decode()
-    except Exception:
-        return "<Decryption Failed>"
-
-# --- MASTER PASSWORD FUNCTIONALITY ---
+# --- PBKDF2 MASTER PASSWORD FUNCTIONALITY ---
 def set_master_password(masterpw):
-    salted = hashlib.sha256(("PasswordsToGo" + masterpw).encode()).hexdigest()
-    with open(MASTER_FILE, "wb") as f:
-        f.write(fernet.encrypt(salted.encode()))
+    key, salt = security_utils.derive_key(masterpw)
+    with open(SALT_FILE, "wb") as f:
+        f.write(salt)
+    with open(HASH_FILE, "wb") as f:
+        f.write(key)
+
 def verify_master_password(masterpw):
     if not os.path.exists(HASH_FILE) or not os.path.exists(SALT_FILE):
         return False
@@ -110,39 +64,37 @@ def verify_master_password(masterpw):
     return security_utils.re_authenticate(masterpw, stored_hash, salt)
 
 def masterpw_is_set():
-    return os.path.exists(MASTER_FILE)
+    return os.path.exists(HASH_FILE) and os.path.exists(SALT_FILE)
 
-# --- VAULT STORAGE ---
-def load_vault():
-    if not os.path.exists(VAULT_FILE):
-        return {"entries": [], "notes": []}
-    with open(VAULT_FILE, "r") as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
+# --- IN-MEMORY VAULT ENCRYPTION & TAMPER DETECTION ---
+class VaultWrapper:
+    def __init__(self, key):
+        self.memory_vault = security_utils.InMemoryVault(key)
+
+    def load(self, encrypted_data):
+        self.memory_vault.load(encrypted_data)
+        return json.loads(self.memory_vault.get())
+
+    def save(self, vault):
+        encrypted_data = self.memory_vault.save(json.dumps(vault))
+        vault_hash = security_utils.compute_vault_hash(encrypted_data)
+        with open(VAULT_FILE, "w") as f:
+            f.write(encrypted_data)
+        with open(HASH_VAULT_FILE, "w") as f:
+            f.write(vault_hash)
+
+    def verify_and_load(self):
+        if not os.path.exists(VAULT_FILE) or not os.path.exists(HASH_VAULT_FILE):
             return {"entries": [], "notes": []}
-
-def save_vault(vault):
-    with open(VAULT_FILE, "w") as f:
-        json.dump(vault, f, indent=2)
-
-def export_vault(filepath, vault):
-    data = encrypt(json.dumps(vault))
-    with open(filepath, "w") as f:
-        f.write(data)
-
-def import_vault(filepath):
-    with open(filepath, "r") as f:
-        data = f.read()
-    try:
-        jsondata = json.loads(decrypt(data))
-        if "entries" in jsondata and "notes" in jsondata:
-            save_vault(jsondata)
-            return True
-        else:
-            return False
-    except Exception:
-        return False
+        with open(VAULT_FILE, "r") as f:
+            encrypted_data = f.read()
+        with open(HASH_VAULT_FILE, "r") as f:
+            stored_hash = f.read()
+        if not security_utils.verify_vault_hash(encrypted_data, stored_hash):
+            messagebox.showerror("Error", "Vault file tampered or corrupted!")
+            return {"entries": [], "notes": []}
+        self.memory_vault.load(encrypted_data)
+        return json.loads(self.memory_vault.get())
 
 # --- PASSWORD GENERATION ---
 def generate_password(length=16, use_upper=True, use_lower=True, use_digits=True, use_symbols=True, exclude_ambiguous=False):
@@ -299,13 +251,17 @@ class MasterPasswordDialog(simpledialog.Dialog):
 
 class PasswordsToGoApp:
     def __init__(self, root):
+        if not verify_release():
+            messagebox.showerror("Security", "Application signature invalid! Exiting for safety.")
+            sys.exit(1)
         self.root = root
         self.theme = get_theme()
         apply_theme(self.root, self.theme)
         self.autolocker = AutoLocker(AUTOLCK_TIMEOUT, self.lock_app)
-        self.vault = load_vault()
-        self.unlocked = False
         self.masterpw = None
+        # Unlock logic will set up self.vault
+        self.vault = None
+        self.vault_wrapper = None
         self.init_login()
 
     def lock_app(self):
@@ -345,6 +301,13 @@ class PasswordsToGoApp:
             return
         if verify_master_password(dlg.result):
             self.masterpw = dlg.result
+            # Derive the session key for vault encryption
+            with open(SALT_FILE, "rb") as f:
+                salt = f.read()
+            vault_key, _ = security_utils.derive_key(self.masterpw, salt)
+            self.vault_wrapper = VaultWrapper(vault_key)
+            # Load and verify vault file
+            self.vault = self.vault_wrapper.verify_and_load()
             self.unlock_app()
         else:
             messagebox.showerror("Error", "Incorrect master password.")
@@ -375,7 +338,6 @@ class PasswordsToGoApp:
         self.lock_app()
 
     def add_password(self):
-        # Password creation dialog with strength meter, 2FA, breach check, generator options, etc.
         add_win = tk.Toplevel(self.root)
         add_win.title("Add / Generate Password")
         apply_theme(add_win, self.theme)
@@ -467,21 +429,26 @@ class PasswordsToGoApp:
                 messagebox.showerror("Error", "Site, Username, and Password are required.")
                 return
             timestamp = int(time.time())
-            history = [{"pw": encrypt(pw), "changed": timestamp}]
+            # Encrypt entries using per-session vault key
+            encrypted_pw = security_utils.encrypt_entry(pw, self.vault_wrapper.memory_vault.fernet._signing_key + self.vault_wrapper.memory_vault.fernet._encryption_key)
+            encrypted_note = security_utils.encrypt_entry(note, self.vault_wrapper.memory_vault.fernet._signing_key + self.vault_wrapper.memory_vault.fernet._encryption_key)
+            encrypted_twofa = security_utils.encrypt_entry(twofa, self.vault_wrapper.memory_vault.fernet._signing_key + self.vault_wrapper.memory_vault.fernet._encryption_key)
+            history = [{"pw": encrypted_pw, "changed": timestamp}]
             entry = {
                 "site": site,
                 "user": user,
-                "password": encrypt(pw),
-                "note": encrypt(note),
+                "password": encrypted_pw,
+                "note": encrypted_note,
                 "favorite": fav,
-                "twofa": encrypt(twofa),
+                "twofa": encrypted_twofa,
                 "history": history,
                 "used": 0,
                 "created": timestamp
             }
             self.vault["entries"].append(entry)
-            save_vault(self.vault)
+            self.vault_wrapper.save(self.vault)
             clipboard.copy(pw)
+            security_utils.clear_clipboard()
             messagebox.showinfo("Saved", "Password saved and copied to clipboard!")
             add_win.destroy()
 
@@ -514,34 +481,47 @@ class PasswordsToGoApp:
             dframe.pack(fill="both", expand=True)
             ttk.Label(dframe, text=f'Site: {entry["site"]}', font=("Segoe UI", 12, "bold")).pack(anchor="w")
             ttk.Label(dframe, text=f'User: {entry["user"]}', font=("Segoe UI", 11)).pack(anchor="w")
-            pw_val = decrypt(entry["password"])
+            # Re-authenticate before revealing password
+            def toggle_pw():
+                dlg = MasterPasswordDialog(self.root)
+                if dlg.result is None:
+                    return
+                with open(SALT_FILE, "rb") as f:
+                    salt = f.read()
+                with open(HASH_FILE, "rb") as f:
+                    stored_hash = f.read()
+                if not security_utils.re_authenticate(dlg.result, stored_hash, salt):
+                    messagebox.showerror("Auth Failed", "Incorrect password.")
+                    return
+                pw_entry.config(show="" if pw_entry.cget("show") == "*" else "*")
+                security_utils.warn_screenshot()
+            pw_val = security_utils.decrypt_entry(entry["password"], self.vault_wrapper.memory_vault.fernet._signing_key + self.vault_wrapper.memory_vault.fernet._encryption_key)
             pw_var = tk.StringVar(value=pw_val)
             ttk.Label(dframe, text="Password:").pack(anchor="w")
             pw_entry = ttk.Entry(dframe, textvariable=pw_var, width=34, show="*")
             pw_entry.pack(anchor="w")
-            def toggle_pw():
-                pw_entry.config(show="" if pw_entry.cget("show") == "*" else "*")
             ttk.Button(dframe, text="Show/Hide", width=9, command=toggle_pw).pack(anchor="w")
-            ttk.Button(dframe, text="Copy Password", command=lambda: [clipboard.copy(pw_var.get()), messagebox.showinfo("Copied", "Copied to clipboard!")]).pack(anchor="w", pady=3)
+            ttk.Button(dframe, text="Copy Password", command=lambda: [clipboard.copy(pw_var.get()), security_utils.clear_clipboard(), messagebox.showinfo("Copied", "Copied to clipboard!")]).pack(anchor="w", pady=3)
             ttk.Label(dframe, text="2FA/TOTP:").pack(anchor="w")
-            totp_var = tk.StringVar(value=decrypt(entry.get("twofa", "")))
+            totp_val = security_utils.decrypt_entry(entry.get("twofa", ""), self.vault_wrapper.memory_vault.fernet._signing_key + self.vault_wrapper.memory_vault.fernet._encryption_key)
+            totp_var = tk.StringVar(value=totp_val)
             ttk.Entry(dframe, textvariable=totp_var, width=34).pack(anchor="w")
             ttk.Label(dframe, text="Note:").pack(anchor="w")
-            note_val = decrypt(entry.get("note", ""))
+            note_val = security_utils.decrypt_entry(entry.get("note", ""), self.vault_wrapper.memory_vault.fernet._signing_key + self.vault_wrapper.memory_vault.fernet._encryption_key)
             ttk.Label(dframe, text=note_val, font=("Segoe UI", 9)).pack(anchor="w")
             fav = entry.get("favorite", False)
             def toggle_fav():
                 entry["favorite"] = not entry.get("favorite", False)
-                save_vault(self.vault)
+                self.vault_wrapper.save(self.vault)
                 details.destroy()
             ttk.Button(dframe, text="Unfavorite" if fav else "Favorite", command=toggle_fav).pack(anchor="w", pady=3)
             ttk.Label(dframe, text="Password History:", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=3)
             for hist in entry.get("history", []):
-                hist_pw = decrypt(hist["pw"])
+                hist_pw = security_utils.decrypt_entry(hist["pw"], self.vault_wrapper.memory_vault.fernet._signing_key + self.vault_wrapper.memory_vault.fernet._encryption_key)
                 changed = time.strftime("%Y-%m-%d %H:%M", time.localtime(hist["changed"]))
                 ttk.Label(dframe, text=f"{changed}: {hist_pw[:3]}... ({len(hist_pw)} chars)").pack(anchor="w")
             entry["used"] = entry.get("used", 0) + 1
-            save_vault(self.vault)
+            self.vault_wrapper.save(self.vault)
         lb.bind("<<ListboxSelect>>", show_selected)
 
     def search_passwords(self):
@@ -580,14 +560,14 @@ class PasswordsToGoApp:
         lb = tk.Listbox(frame, width=54, height=10)
         lb.pack(side="left", fill="y")
         for note in notes:
-            title = decrypt(note["title"])
+            title = security_utils.decrypt_entry(note["title"], self.vault_wrapper.memory_vault.fernet._signing_key + self.vault_wrapper.memory_vault.fernet._encryption_key)
             lb.insert("end", title)
         def show_note():
             idx = lb.curselection()
             if not idx: return
             note = notes[idx[0]]
-            title = decrypt(note["title"])
-            body = decrypt(note["body"])
+            title = security_utils.decrypt_entry(note["title"], self.vault_wrapper.memory_vault.fernet._signing_key + self.vault_wrapper.memory_vault.fernet._encryption_key)
+            body = security_utils.decrypt_entry(note["body"], self.vault_wrapper.memory_vault.fernet._signing_key + self.vault_wrapper.memory_vault.fernet._encryption_key)
             nw = tk.Toplevel(notes_win)
             nw.title(title)
             apply_theme(nw, self.theme)
@@ -603,8 +583,10 @@ class PasswordsToGoApp:
             title = simpledialog.askstring("Note Title", "Title:")
             body = simpledialog.askstring("Note Body", "Body:")
             if title and body:
-                notes.append({"title": encrypt(title), "body": encrypt(body)})
-                save_vault(self.vault)
+                encrypted_title = security_utils.encrypt_entry(title, self.vault_wrapper.memory_vault.fernet._signing_key + self.vault_wrapper.memory_vault.fernet._encryption_key)
+                encrypted_body = security_utils.encrypt_entry(body, self.vault_wrapper.memory_vault.fernet._signing_key + self.vault_wrapper.memory_vault.fernet._encryption_key)
+                notes.append({"title": encrypted_title, "body": encrypted_body})
+                self.vault_wrapper.save(self.vault)
                 lb.insert("end", title)
         ttk.Button(frame, text="Add Note", command=add_note).pack()
 
@@ -621,18 +603,27 @@ class PasswordsToGoApp:
     def export_vault_dialog(self):
         path = filedialog.asksaveasfilename(title="Export Vault", defaultextension=".ptg", filetypes=[("PasswordsToGo Vault", "*.ptg")])
         if not path: return
-        export_vault(path, self.vault)
+        # Export encrypted vault file
+        with open(VAULT_FILE, "r") as f:
+            encrypted_data = f.read()
+        with open(path, "w") as f:
+            f.write(encrypted_data)
         messagebox.showinfo("Export", "Vault exported successfully.")
 
     def import_vault_dialog(self):
         path = filedialog.askopenfilename(title="Import Vault", filetypes=[("PasswordsToGo Vault", "*.ptg")])
         if not path: return
-        if import_vault(path):
-            self.vault = load_vault()
-            messagebox.showinfo("Import", "Vault imported successfully.")
-            self.lock_app()
-        else:
-            messagebox.showerror("Import", "Failed to import vault.")
+        with open(path, "r") as f:
+            encrypted_data = f.read()
+        with open(VAULT_FILE, "w") as f:
+            f.write(encrypted_data)
+        # (Recompute hash after import)
+        vault_hash = security_utils.compute_vault_hash(encrypted_data)
+        with open(HASH_VAULT_FILE, "w") as f:
+            f.write(vault_hash)
+        self.vault = self.vault_wrapper.verify_and_load()
+        messagebox.showinfo("Import", "Vault imported successfully.")
+        self.lock_app()
 
     def settings_dialog(self):
         win = tk.Toplevel(self.root)
@@ -678,20 +669,33 @@ class PasswordsToGoApp:
             dframe.pack(fill="both", expand=True)
             ttk.Label(dframe, text=f'Site: {entry["site"]}', font=("Segoe UI", 12, "bold")).pack(anchor="w")
             ttk.Label(dframe, text=f'User: {entry["user"]}', font=("Segoe UI", 11)).pack(anchor="w")
-            pw_val = decrypt(entry["password"])
+            pw_val = security_utils.decrypt_entry(entry["password"], self.vault_wrapper.memory_vault.fernet._signing_key + self.vault_wrapper.memory_vault.fernet._encryption_key)
             pw_var = tk.StringVar(value=pw_val)
             ttk.Label(dframe, text="Password:").pack(anchor="w")
             pw_entry = ttk.Entry(dframe, textvariable=pw_var, width=34, show="*")
             pw_entry.pack(anchor="w")
             def toggle_pw():
+                dlg = MasterPasswordDialog(self.root)
+                if dlg.result is None:
+                    return
+                with open(SALT_FILE, "rb") as f:
+                    salt = f.read()
+                with open(HASH_FILE, "rb") as f:
+                    stored_hash = f.read()
+                if not security_utils.re_authenticate(dlg.result, stored_hash, salt):
+                    messagebox.showerror("Auth Failed", "Incorrect password.")
+                    return
                 pw_entry.config(show="" if pw_entry.cget("show") == "*" else "*")
+                security_utils.warn_screenshot()
             ttk.Button(dframe, text="Show/Hide", width=9, command=toggle_pw).pack(anchor="w")
-            ttk.Button(dframe, text="Copy Password", command=lambda: [clipboard.copy(pw_var.get()), messagebox.showinfo("Copied", "Copied to clipboard!")]).pack(anchor="w", pady=3)
+            ttk.Button(dframe, text="Copy Password", command=lambda: [clipboard.copy(pw_var.get()), security_utils.clear_clipboard(), messagebox.showinfo("Copied", "Copied to clipboard!")]).pack(anchor="w", pady=3)
         lb.bind("<<ListboxSelect>>", show_selected)
 
 if __name__ == "__main__":
+    import pyperclip
+    import requests
     root = tk.Tk()
     root.geometry("480x600")
     app = PasswordsToGoApp(root)
     if getattr(app, "unlocked", True):
-        root.mainloop()       
+        root.mainloop()
