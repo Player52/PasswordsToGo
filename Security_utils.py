@@ -5,13 +5,14 @@ import secrets
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
 
 # --- PBKDF2 Key Derivation ---
 def derive_key(master_password, salt=None, iterations=200_000):
     if salt is None:
         salt = secrets.token_bytes(16)
     kdf = PBKDF2HMAC(
-        algorithm=hashlib.sha256(),
+        algorithm=hashes.SHA256(),
         length=32,
         salt=salt,
         iterations=iterations,
