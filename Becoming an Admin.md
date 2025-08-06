@@ -56,10 +56,10 @@
    Head of Community Activity, engagement, Q&A Lead and all other Community-related jobs.
 
 - **Chief Project Officer:**
-   Head of the Project  itself. They decide whether Pull requests are accepted, managing the project, and Head of new features.
+   Head of the Project  itself. They decide whether Pull requests are accepted, manage the project, and Head of new features.
 
 - **Admin**
-   They assist in all of the Admin roles. They Help in all departments. There can be up to 11 Admins in this role, making 15 total admins.
+   They assist in all administrative roles and help in all departments. There can be up to 11 Admins in this role, making a total of 15 admins.
 
   ---
   
