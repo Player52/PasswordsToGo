@@ -1,3 +1,5 @@
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/e6e5c3a0-bf8b-4841-a84e-451c6942eb58" />
+
 # How to Become an Admin
 
 **Admin privileges for PasswordsToGo are granted only under strict and exceptional circumstances.**
