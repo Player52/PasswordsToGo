@@ -14,6 +14,10 @@ import sys
 # ---- VERSION ----
 APP_VERSION = "1.0.0"
 APP_NAME = "PasswordsToGo"
+# ---- File Support ----
+SALT_FILE = "master_salt.bin"
+HASH_FILE = "master_hash.bin"
+
 
 # External dependencies
 try:
@@ -96,18 +100,14 @@ def set_master_password(masterpw):
     salted = hashlib.sha256(("PasswordsToGo" + masterpw).encode()).hexdigest()
     with open(MASTER_FILE, "wb") as f:
         f.write(fernet.encrypt(salted.encode()))
-
 def verify_master_password(masterpw):
-    if not os.path.exists(MASTER_FILE):
+    if not os.path.exists(HASH_FILE) or not os.path.exists(SALT_FILE):
         return False
-    with open(MASTER_FILE, "rb") as f:
-        encrypted = f.read()
-    try:
-        stored = fernet.decrypt(encrypted).decode()
-        user = hashlib.sha256(("PasswordsToGo" + masterpw).encode()).hexdigest()
-        return stored == user
-    except InvalidToken:
-        return False
+    with open(SALT_FILE, "rb") as f:
+        salt = f.read()
+    with open(HASH_FILE, "rb") as f:
+        stored_hash = f.read()
+    return security_utils.re_authenticate(masterpw, stored_hash, salt)
 
 def masterpw_is_set():
     return os.path.exists(MASTER_FILE)
