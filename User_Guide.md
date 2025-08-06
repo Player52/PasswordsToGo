@@ -1,3 +1,5 @@
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/8a2bc7f6-ecdb-4dd2-b54e-91ee3be0838c" />
+
 # PasswordsToGo User Guide
 
 Welcome to **PasswordsToGo**, your secure, easy-to-use password manager and generator. This guide will walk you through installing, using, and customizing PasswordsToGo for your needs.
