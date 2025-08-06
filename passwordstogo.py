@@ -2,14 +2,35 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, filedialog
 import json
 import os
-import security_utils
 import random
 import string
 import time
 import threading
-import hashlib
 import platform
 import sys
+import security_utils
+
+try:
+    import pyperclip
+except ImportError:
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyperclip"])
+    import pyperclip
+
+try:
+    import requests
+except ImportError:
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "requests"])
+    import requests
+
+if platform.system() == "Windows":
+    try:
+        import win32com.client
+    except ImportError:
+        import subprocess
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "pywin32"])
+        import win32com.client
 
 # ---- VERSION ----
 APP_VERSION = "1.0.0"
@@ -40,13 +61,11 @@ class SecureClipboard:
 
 clipboard = SecureClipboard()
 
-# --- Application Signing Verification ---
 def verify_release():
     if not os.path.exists(SIGNATURE_FILE) or not os.path.exists(PUBLIC_KEY_FILE):
-        return True  # skip if not set up
+        return True
     return security_utils.verify_release(__file__, SIGNATURE_FILE, PUBLIC_KEY_FILE)
 
-# --- PBKDF2 MASTER PASSWORD FUNCTIONALITY ---
 def set_master_password(masterpw):
     key, salt = security_utils.derive_key(masterpw)
     with open(SALT_FILE, "wb") as f:
@@ -66,7 +85,6 @@ def verify_master_password(masterpw):
 def masterpw_is_set():
     return os.path.exists(HASH_FILE) and os.path.exists(SALT_FILE)
 
-# --- IN-MEMORY VAULT ENCRYPTION & TAMPER DETECTION ---
 class VaultWrapper:
     def __init__(self, key):
         self.memory_vault = security_utils.InMemoryVault(key)
@@ -96,7 +114,6 @@ class VaultWrapper:
         self.memory_vault.load(encrypted_data)
         return json.loads(self.memory_vault.get())
 
-# --- PASSWORD GENERATION ---
 def generate_password(length=16, use_upper=True, use_lower=True, use_digits=True, use_symbols=True, exclude_ambiguous=False):
     upper = string.ascii_uppercase
     lower = string.ascii_lowercase
@@ -136,7 +153,6 @@ def strength_text_color(score):
         ("Excellent", "#174")
     ][min(score, 5)]
 
-# --- AUTOLCOK/TIMEOUT ---
 class AutoLocker:
     def __init__(self, timeout, lock_callback):
         self.timeout = timeout
@@ -159,7 +175,6 @@ class AutoLocker:
         if self.timer and self.timer.is_alive():
             self.timer.cancel()
 
-# --- THEME SUPPORT ---
 def get_theme():
     return "dark" if os.path.exists(THEME_FILE) and open(THEME_FILE).read().strip() == "dark" else "light"
 
@@ -182,7 +197,6 @@ def apply_theme(root, theme):
         style.configure("TButton", background="#e7e7e7", foreground="#222")
         root.configure(bg="#f7f7f7")
 
-# --- BIOMETRIC UNLOCK (Windows Hello stub, fallback to master password) ---
 def biometric_available():
     return platform.system() == "Windows" and "win32com" in sys.modules
 
@@ -196,7 +210,6 @@ def try_biometric():
             return False
     return False
 
-# --- BREACH CHECK (HIBP password hash API) ---
 def check_breach(password):
     sha1pw = hashlib.sha1(password.encode()).hexdigest().upper()
     prefix = sha1pw[:5]
@@ -259,9 +272,9 @@ class PasswordsToGoApp:
         apply_theme(self.root, self.theme)
         self.autolocker = AutoLocker(AUTOLCK_TIMEOUT, self.lock_app)
         self.masterpw = None
-        # Unlock logic will set up self.vault
         self.vault = None
         self.vault_wrapper = None
+        self.unlocked = False
         self.init_login()
 
     def lock_app(self):
@@ -301,12 +314,10 @@ class PasswordsToGoApp:
             return
         if verify_master_password(dlg.result):
             self.masterpw = dlg.result
-            # Derive the session key for vault encryption
             with open(SALT_FILE, "rb") as f:
                 salt = f.read()
             vault_key, _ = security_utils.derive_key(self.masterpw, salt)
             self.vault_wrapper = VaultWrapper(vault_key)
-            # Load and verify vault file
             self.vault = self.vault_wrapper.verify_and_load()
             self.unlock_app()
         else:
@@ -429,7 +440,6 @@ class PasswordsToGoApp:
                 messagebox.showerror("Error", "Site, Username, and Password are required.")
                 return
             timestamp = int(time.time())
-            # Encrypt entries using per-session vault key
             encrypted_pw = security_utils.encrypt_entry(pw, self.vault_wrapper.memory_vault.fernet._signing_key + self.vault_wrapper.memory_vault.fernet._encryption_key)
             encrypted_note = security_utils.encrypt_entry(note, self.vault_wrapper.memory_vault.fernet._signing_key + self.vault_wrapper.memory_vault.fernet._encryption_key)
             encrypted_twofa = security_utils.encrypt_entry(twofa, self.vault_wrapper.memory_vault.fernet._signing_key + self.vault_wrapper.memory_vault.fernet._encryption_key)
@@ -481,7 +491,6 @@ class PasswordsToGoApp:
             dframe.pack(fill="both", expand=True)
             ttk.Label(dframe, text=f'Site: {entry["site"]}', font=("Segoe UI", 12, "bold")).pack(anchor="w")
             ttk.Label(dframe, text=f'User: {entry["user"]}', font=("Segoe UI", 11)).pack(anchor="w")
-            # Re-authenticate before revealing password
             def toggle_pw():
                 dlg = MasterPasswordDialog(self.root)
                 if dlg.result is None:
@@ -603,7 +612,6 @@ class PasswordsToGoApp:
     def export_vault_dialog(self):
         path = filedialog.asksaveasfilename(title="Export Vault", defaultextension=".ptg", filetypes=[("PasswordsToGo Vault", "*.ptg")])
         if not path: return
-        # Export encrypted vault file
         with open(VAULT_FILE, "r") as f:
             encrypted_data = f.read()
         with open(path, "w") as f:
@@ -617,7 +625,6 @@ class PasswordsToGoApp:
             encrypted_data = f.read()
         with open(VAULT_FILE, "w") as f:
             f.write(encrypted_data)
-        # (Recompute hash after import)
         vault_hash = security_utils.compute_vault_hash(encrypted_data)
         with open(HASH_VAULT_FILE, "w") as f:
             f.write(vault_hash)
@@ -692,8 +699,6 @@ class PasswordsToGoApp:
         lb.bind("<<ListboxSelect>>", show_selected)
 
 if __name__ == "__main__":
-    import pyperclip
-    import requests
     root = tk.Tk()
     root.geometry("480x600")
     app = PasswordsToGoApp(root)
