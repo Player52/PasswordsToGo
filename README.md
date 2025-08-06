@@ -46,7 +46,7 @@ We put your security first:
       OR
 1. **Download or clone this repository** to your computer if you haven't already.
 2. **Go to File Explorer**
-3. **Open python passwordstogo.py or if that isn't there: python3 passwordstogo.py**
+3. **Open passwordstogo.py, it should be in the file 'PasswordsToGo'.**
 
 **Regardless of whatever method you used:**
 
