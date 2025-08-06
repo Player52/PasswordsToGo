@@ -1,3 +1,5 @@
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/0bc4b74c-41fc-4efd-8964-bd6a883c7463" />
+
 # Security Policy for PasswordsToGo
 
 _Last updated: 2025-08-06_
